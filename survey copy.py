@@ -4,8 +4,6 @@ import os
 import glob
 import random
 import uuid
-import gspread
-from google.oauth2.service_account import Credentials
 
 # ---------- CONFIG ----------
 IMAGES_DIR = "dataset"   
@@ -37,22 +35,6 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# ---------- Google Sheets Helpers ----------
-def get_gsheet_client():
-    creds_dict = st.secrets["gcp_service_account"]
-    credentials = Credentials.from_service_account_info(
-        creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    client = gspread.authorize(credentials)
-    return client
-
-def append_row(sheet_id, worksheet_name, values):
-    client = get_gsheet_client()
-    sheet = client.open_by_key(sheet_id)
-    ws = sheet.worksheet(worksheet_name)
-    ws.append_row(values)
-
 # ---------- Helpers ----------
 def list_images(directory):
     patterns = ["*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp", "*.webp"]
@@ -63,6 +45,40 @@ def list_images(directory):
     return files
 
 
+def ensure_csv_header(path):
+    if not os.path.exists(path):
+        df = pd.DataFrame(columns=[
+            "participant_id",
+            "image_filename",
+            "image_index",
+            "rating",
+            "timestamp"
+        ])
+        df.to_csv(path, index=False)
+
+
+def append_response(path, row: dict):
+    df = pd.DataFrame([row])
+    df.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
+
+
+def ensure_participants_csv(path):
+    if not os.path.exists(path):
+        df = pd.DataFrame(columns=[
+            "participant_id",
+            "age",
+            "role",
+            "gender",
+            "social_activity",
+            "consent",
+            "timestamp_utc"
+        ])
+        df.to_csv(path, index=False)
+
+
+def save_participant_row(path, row: dict):
+    df = pd.DataFrame([row])
+    df.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
 
 
 def generate_unique_id(csv_path=PARTICIPANTS_CSV):
@@ -211,18 +227,18 @@ def show_personal_info():
 
         # Start button
         if st.button("Start demo", disabled=(start_disabled or not st.session_state.consent)):
-            append_row(
-                st.secrets["sheets"]["master_sheet_id"],
-                "participants",
-                [
-                    st.session_state.participant_id,
-                    st.session_state.age,
-                    st.session_state.sex,
-                    st.session_state.color_blind,
-                    st.session_state.expertise,
-                    str(st.session_state.consent)
-                ]
-            )
+            # write participant row to participants.csv
+            ensure_participants_csv(PARTICIPANTS_CSV)
+            row = {
+                "participant_id": st.session_state.participant_id,
+                "age": st.session_state.age,
+                "sex": st.session_state.sex,
+                "color_blind": st.session_state.color_blind,
+                "expertise": st.session_state.expertise,
+                "consent": st.session_state.consent,
+            }
+            save_participant_row(PARTICIPANTS_CSV, row)
+
             # move to rating page
             st.session_state.page = "demo_intro"
             st.rerun()
@@ -435,21 +451,16 @@ def show_rating():
                                 disabled=(rating is None))
     
         if next_button:
-            append_row(
-                st.secrets["sheets"]["master_sheet_id"],
-                "responses",
-                [
-                    st.session_state.participant_id,
-                    os.path.basename(image_path),
-                    int(rating)
-                ]
-            )
-            # also keep in session
-            st.session_state.session_responses.append({
+            # save to CSV immediately
+            ensure_csv_header(CSV_PATH)
+            row = {
                 "participant_id": st.session_state.participant_id,
                 "image_filename": os.path.basename(image_path),
                 "rating": int(rating),
-            })
+            }
+            append_response(CSV_PATH, row)
+            # also keep in session
+            st.session_state.session_responses.append(row)
 
             # advance or finish
             if idx + 1 < total:
